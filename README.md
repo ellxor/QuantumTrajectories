@@ -4,5 +4,6 @@ Starter code for quantum trajectories for a spin-1/2 cavity to reproduce Fig 2a 
 
 **Current Results:**
 
-![Current results](results.png)
-![Single trajectory](single_trajectory.png)
+![Current results](graphs/results.png)
+![Single trajectory](graphs/single_trajectory.png)
+![Kappa only](graphs/kappa_only.png)
