@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <complex.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <threads.h>
+#include <sys/sysinfo.h>
 
 using namespace std::complex_literals;
 
@@ -13,6 +15,27 @@ using namespace std::complex_literals;
 #ifndef OPTION_N
 #  define OPTION_N 32
 #endif
+
+#ifndef OPTION_PHI
+#  define OPTION_PHI 0.1
+#endif
+
+#ifndef OPTION_DOWN
+#  define OPTION_DOWN 0.2
+#endif
+
+#ifndef OPTION_SIMULATION_ITERATIONS
+#  define OPTION_SIMULATION_ITERATIONS 40'000
+#endif
+
+#ifndef OPTION_CAVITY_LIMIT
+#  define OPTION_CAVITY_LIMIT (3*N/8)
+#endif
+
+
+#ifndef OUTPUT_PREFIX
+#  define OUTPUT_PREFIX "data/"
+#endif
 //=================================================================================================
 
 
@@ -20,22 +43,23 @@ using namespace std::complex_literals;
 // MAIN OPTIONS
 //=================================================================================================
 constexpr int N = OPTION_N;
-constexpr int CAVITY_LIMIT = std::max(3*N/8, 32);
+constexpr int CAVITY_LIMIT = std::max(OPTION_CAVITY_LIMIT, 32);
 static_assert(N % 2 == 0, "N must be even!");
 
 constexpr float KAPPA = 1.0;
-constexpr float GAMMA_PHI = 0.1;
-constexpr float GAMMA_DOWN = 0.2;
+constexpr float GAMMA_PHI = OPTION_PHI;
+constexpr float GAMMA_DOWN = OPTION_DOWN;
 constexpr float OMEGA_C = 1.0;
 constexpr float OMEGA_0 = 0.5;
 constexpr float G_COUPLING = 0.9 / sqrtf(N);
 
 constexpr float TIME_DELTA = 1e-3;
-constexpr int SIMULATION_ITERATIONS = 40'000;
-constexpr int LOGGING_ITERATIONS = 16; // log every this number of steps (ideally power of 2)
+constexpr int SIMULATION_ITERATIONS = OPTION_SIMULATION_ITERATIONS;
+constexpr int LOGGING_ITERATIONS = 32; // log every this number of steps (ideally power of 2)
+constexpr int LOG_FILE_LINES = SIMULATION_ITERATIONS / LOGGING_ITERATIONS;
 
 static_assert(SIMULATION_ITERATIONS % LOGGING_ITERATIONS == 0,
-	"total iterations must be an integer multiple of the logging iteration steps");
+	"Total iterations must be an integer multiple of the logging iteration steps.");
 //=================================================================================================
 
 // An (M,a) vector constrained to a single J sector.
@@ -51,6 +75,11 @@ struct WaveVector {
 constexpr size_t begin(int j_sector) {
 	return (N/2 - j_sector + 1)*CAVITY_LIMIT;
 }
+
+// Tables for storing average expectation values of all simulations
+static std::atomic<float> expectation_of_a[LOG_FILE_LINES] = {};
+static std::atomic<float> expectation_of_m[LOG_FILE_LINES] = {};
+static std::atomic<float> expectation_of_j[LOG_FILE_LINES] = {};
 
 // Compute Effective Hamiltonian efficiently by using shifts rather than a matrix.
 // This term is also multiplied by -i dt.
@@ -116,7 +145,7 @@ void evolve_under_effective_hamiltonian(WaveVector &wave, int j_sector) {
 		}
 
 		if (i == 1) a = &_a; // a is temporarily set to &wave for first iteration to avoid a copy
-		std::swap(a, b); // perform float buffering
+		std::swap(a, b); // perform double-buffering
 	}
 }
 
@@ -128,7 +157,7 @@ constexpr float precompute_G(int J) { return (float)(N/2 - J + 1) / (2*J*(2*J - 
 
 
 void run_simulation(size_t thread_index) {
-	// xorshift-* peudo-random 64-bit number algorithm
+	// xorshift-* high-quality, fast non-cryptographic 64-bit PRNG
 	constexpr uint64_t MAGIC = 0x2545f4914f6cdd1d;
 	uint64_t seed = thread_index ^ MAGIC;
 
@@ -138,10 +167,6 @@ void run_simulation(size_t thread_index) {
 		seed ^= seed >> 27;
 		return seed * MAGIC;
 	};
-
-	char filename[100];
-	std::snprintf(filename, sizeof filename, "data/log-%d-thread-%zu.txt", N, thread_index);
-	auto *log = fopen(filename, "wb");
 
 	// start with maximum allowed J (free choice)
 	int j_sector = N/2;
@@ -310,6 +335,7 @@ void run_simulation(size_t thread_index) {
 
 		auto index = begin(j_sector);
 		float inner_product = 0;
+		float m_expectation = 0;
 
 		for (int m = -j_sector; m <= j_sector; ++m) {
 			for (int a = 0; a < CAVITY_LIMIT; ++a) {
@@ -317,6 +343,7 @@ void run_simulation(size_t thread_index) {
 				++index;
 
 				inner_product += norm;
+				m_expectation += norm * m;
 				jump_table[JUMP_PHOTON_ANNIHILATION] += norm * a;
 				jump_table[JUMP_DEPHASING_SAME_SPIN] += norm * m*m;
 				jump_table[JUMP_DEPHASING_LOWER_SPIN] += norm * (j_sector - m)    *(j_sector + m);
@@ -344,7 +371,11 @@ void run_simulation(size_t thread_index) {
 
 		// Log out the expectation of a whilst it is equal to the non-rated probability of photon annihilation.
 		if (i % LOGGING_ITERATIONS == LOGGING_ITERATIONS - 1) {
-			std::fprintf(log, "%f\n", jump_table[JUMP_PHOTON_ANNIHILATION] / N);
+			auto write_index = i / LOGGING_ITERATIONS;
+
+			expectation_of_a[write_index] += jump_table[JUMP_PHOTON_ANNIHILATION];
+			expectation_of_m[write_index] += m_expectation * scale*scale;
+			expectation_of_j[write_index] += j_sector;
 		}
 
 		// Scale jump table by process rates.
@@ -356,8 +387,6 @@ void run_simulation(size_t thread_index) {
 		jump_table[JUMP_SPIN_LOSS_LOWER_SPIN] *= TIME_DELTA * GAMMA_DOWN * factor_of_F;
 		jump_table[JUMP_SPIN_LOSS_UPPER_SPIN] *= TIME_DELTA * GAMMA_DOWN * factor_of_G;
 	}
-
-	fclose(log);
 }
 
 
@@ -376,8 +405,15 @@ double get_time_from_os() {
 
 
 int main() {
-	constexpr size_t REPEATS = 50;
-	constexpr size_t THREAD_COUNT = 12;
+	constexpr size_t REPEATS = 12;
+	constexpr size_t THREAD_COUNT = 168;
+
+	size_t core_count = get_nprocs();
+	std::fprintf(stdout, "[INFO] %zu cpu cores detected.\n", core_count);
+
+	if (THREAD_COUNT > core_count) {
+		std::fprintf(stdout, "[WARNING] running with more threads than cores available.\n");
+	}
 
 	thrd_t threads[THREAD_COUNT];
 	size_t index = 0;
@@ -386,10 +422,27 @@ int main() {
 	for (size_t i = 0; i < REPEATS; ++i) {
 		for (auto& thread : threads) thrd_create(&thread, start_simulation_thread, (void *)index++);
 		for (auto& thread : threads) thrd_join(thread, nullptr);
-		std::fprintf(stderr, "Round %zu/%zu complete.\n", i + 1, REPEATS);
+		std::fprintf(stdout, "Round %zu/%zu complete.\n", i + 1, REPEATS);
 	}
 	auto t2 = get_time_from_os();
 
-	std::fprintf(stderr, "%.0f iterations per second per thread.\n", REPEATS * SIMULATION_ITERATIONS / (t2 - t1));
-	std::fprintf(stderr, "%.0f iterations per second.\n", REPEATS * THREAD_COUNT * SIMULATION_ITERATIONS / (t2 - t1));
+	std::fprintf(stdout, "%.0f iterations per second per thread.\n", REPEATS * SIMULATION_ITERATIONS / (t2 - t1));
+	std::fprintf(stdout, "%.0f iterations per second.\n", REPEATS * THREAD_COUNT * SIMULATION_ITERATIONS / (t2 - t1));
+
+	char filename[100];
+	std::snprintf(filename, sizeof filename, OUTPUT_PREFIX "log-N-%d.txt", N);
+	std::fprintf(stdout, "Writing data to %s...\n", filename);
+
+	auto *log = fopen(filename, "wb");
+	constexpr size_t TOTAL_COUNT = REPEATS * THREAD_COUNT;
+
+	for (int i = 0; i < LOG_FILE_LINES; ++i) {
+		std::fprintf(log, "%.8f,%.8f,%.8f\n",
+			expectation_of_a[i] / TOTAL_COUNT,
+			expectation_of_m[i] / TOTAL_COUNT,
+			expectation_of_j[i] / TOTAL_COUNT
+		);
+	}
+
+	fclose(log);
 }
