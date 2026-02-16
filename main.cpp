@@ -31,7 +31,7 @@ constexpr float OMEGA_0 = 0.5;
 constexpr float G_COUPLING = 0.9 / sqrtf(N);
 
 constexpr float TIME_DELTA = 1e-3;
-constexpr int SIMULATION_ITERATIONS = 10'000;
+constexpr int SIMULATION_ITERATIONS = 40'000;
 constexpr int LOGGING_ITERATIONS = 16; // log every this number of steps (ideally power of 2)
 
 static_assert(SIMULATION_ITERATIONS % LOGGING_ITERATIONS == 0,
@@ -66,7 +66,7 @@ void compute_effective_hamiltonian_step(const WaveVector &src, WaveVector &dst, 
 			// First the T dagger T jump terms: these summed over produce a neat
 			// closed form, verified using sympy, coded below.
 			dst.coeffs[index] -= src.coeffs[index] * (TIME_DELTA/2)
-			                  * (KAPPA*a + GAMMA_PHI*N + 4*GAMMA_DOWN*(m + N/2));
+			                  * (KAPPA*a + GAMMA_PHI*N + GAMMA_DOWN*(m + N/2));
 
 			// Next the Hamiltonian terms which result in a 5-way branching
 			auto coeff = 1.0if * TIME_DELTA * src.coeffs[index];
@@ -140,15 +140,15 @@ void run_simulation(size_t thread_index) {
 	};
 
 	char filename[100];
-	std::snprintf(filename, sizeof filename, "data/test-log-%d-thread-%zu.txt", N, thread_index);
+	std::snprintf(filename, sizeof filename, "data/log-%d-thread-%zu.txt", N, thread_index);
 	auto *log = fopen(filename, "wb");
 
 	// start with maximum allowed J (free choice)
 	int j_sector = N/2;
 
-	// start in state M = 0, a = max
+	// start in state M = 0, a = 0
 	WaveVector wave = {};
-	wave.coeffs[begin(j_sector) + CAVITY_LIMIT - 1] = 1;
+	wave.coeffs[begin(j_sector)] = 1;
 
 	enum {
 		JUMP_PHOTON_ANNIHILATION,
@@ -352,9 +352,9 @@ void run_simulation(size_t thread_index) {
 		jump_table[JUMP_DEPHASING_SAME_SPIN]  *= TIME_DELTA * 4*GAMMA_PHI  * factor_of_E;
 		jump_table[JUMP_DEPHASING_LOWER_SPIN] *= TIME_DELTA * 4*GAMMA_PHI  * factor_of_F;
 		jump_table[JUMP_DEPHASING_UPPER_SPIN] *= TIME_DELTA * 4*GAMMA_PHI  * factor_of_G;
-		jump_table[JUMP_SPIN_LOSS_SAME_SPIN]  *= TIME_DELTA * 4*GAMMA_DOWN * factor_of_E;
-		jump_table[JUMP_SPIN_LOSS_LOWER_SPIN] *= TIME_DELTA * 4*GAMMA_DOWN * factor_of_F;
-		jump_table[JUMP_SPIN_LOSS_UPPER_SPIN] *= TIME_DELTA * 4*GAMMA_DOWN * factor_of_G;
+		jump_table[JUMP_SPIN_LOSS_SAME_SPIN]  *= TIME_DELTA * GAMMA_DOWN * factor_of_E;
+		jump_table[JUMP_SPIN_LOSS_LOWER_SPIN] *= TIME_DELTA * GAMMA_DOWN * factor_of_F;
+		jump_table[JUMP_SPIN_LOSS_UPPER_SPIN] *= TIME_DELTA * GAMMA_DOWN * factor_of_G;
 	}
 
 	fclose(log);
