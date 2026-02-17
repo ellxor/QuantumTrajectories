@@ -123,7 +123,7 @@ void evolve_under_effective_hamiltonian(WaveVector &wave, int j_sector) {
 	// In this case of an exponential and linear Hamiltonian, the Runge-Kutta method
 	// is identical to a Taylor series expansion, so this is performed for efficiency.
 
-	WaveVector _a, _b; // create two temporary wave vectors as a double-buffering technique.
+	static thread_local WaveVector _a, _b; // create two temporary wave vectors as a double-buffering technique.
 	WaveVector *a = &wave, *b = &_b; // these are controlled by pointers which are cheap to swap.
 
 	int factorial = 1;
@@ -172,7 +172,7 @@ void run_simulation(size_t thread_index) {
 	int j_sector = N/2;
 
 	// start in state M = 0, a = 0
-	WaveVector wave = {};
+	static thread_local WaveVector wave = {};
 	wave.coeffs[begin(j_sector)] = 1;
 
 	enum {
