@@ -35,6 +35,7 @@ gcc -std=c23 -o main src/main.c -lm -O3 -ffast-math -march=native -Wall -Wno-psa
 - [ ] Add graphs of latest results to README.
 - [ ] Refactor code to make symmetry-breaking cleaner.
 - [ ] Refactor main function and add more detailed logging / output.
+- [ ] Explore using GPU acceleration to speed up code.
 - [ ] Add timeout variable to stop simulation at a certain time theshold (useful for university servers).
 	- [ ] Dump data to file after each round as a backup, to prevent data loss if process is killed.
 - [ ] Add Python/Julia wrapper libraries.
